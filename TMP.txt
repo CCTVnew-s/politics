@@ -1,0 +1,69 @@
+
+getmatch:{[bqty;bpx;sqty;spx;preclose]
+          bqty: bqty idesc bpx;
+          bpx: desc bpx;
+          sqty: sqty iasc spx;
+          spx: asc spx;
+          bdict: bpx ! sums bqty;
+          sdict: spx ! sums sqty;
+          bpdict: bpx ! 0.01 + -1 xprev bpx;
+          spdict: spx ! -0.01 + -1 xprev spx;
+          allpx: distinct asc bpx, spx;
+          matcht: ([] px:allpx; bqty: value allpx#bdict; sqty: value allpx#sdict; bbd: value allpx#bpdict; sbd: value allpx#spdict);
+          matcht: update trd: ?[bqty>sqty;sqty;bqty] from update reverse fills reverse bqty, fills sqty from matcht;          
+          matchx: select from matcht where trd = max trd;
+          $[1 = count matchx;: exec first px from matchx; 0n];
+          $[0 = count matchx;: exec first px from matchx; 0n];
+          allb: exec all bqty>sqty from matchx;
+          alls: exec all sqty>bqty from matchx;
+          $[allb or alls; :$[allb;:exec max px from matchx; :exec min px from matchx];0n];
+          $[2 <= count matchx;  [r1: (select pl:px, pr:sbd from matchx where not null sbd, sqty = min sqty);  r2: (select pl:bbd, pr:px from matchx where not null bbd, bqty = min bqty);range: exec max pl, min pr from r1,r2; $[preclose within value range;:preclose;1b];$[all preclose > range;:range[`pr];:range[`pl]  ] ]; :0n];
+          :0n;
+}
+
+
+auctionmatching:{[d]
+      0N!d;
+      symuni: .data.getSymbolInScope[d];
+      ord_d:  select from  .data.getOrdsAU[d] where symbol in symuni;
+      trd_d:  select from .data.getTrdsAU[d] where symbol in symuni;
+      book_d: select from .data.getBookAU[d] where symbol in symuni;    
+      cxl_d:  select from .data.getCxlAU[d] where symbol in symuni;
+      daily_d:select from .data.getDailyData[d] where symbol in symuni;
+      openpx: select symbol, openvol, open: ?[openvol>0;open;midatopen] from ((select  openvol: last TotalVolume, midatopen: last 0.5*AskPrice1+BidPrice1 by symbol from book_d where (Status = 20) or (Status=28)) lj `symbol xkey (select open:first Price by symbol  from trd_d));
+      ord_dext:  ord_d lj `symbol xkey openpx;
+      ord_dext: ord_dext lj `symbol`OrdID xkey select cxltm:TransactTime, OrdID, symbol from cxl_d;
+      matchstats: select count Quantity by symbol, Side, Price from  ord_dext where  null cxltm  ;
+      matchtj: (select bqty:Quantity, bpx: Price by symbol from matchstats where Side = 0) lj (select sqty:Quantity, spx: Price by symbol from matchstats where Side = 1) lj `symbol xkey select symbol, pre_close from daily_d;
+      oa2: (select symbol, OA2: getmatch'[bqty;bpx;sqty;spx;pre_close] from matchtj) lj `symbol xkey openpx;
+      rtn: select symbol,  s31: OA2%open from oa2; 
+      o1dext: update qlt: ?[Side=0; -1.0 + Price%OA2; 1.0 - Price%OA2] from ord_dext lj `symbol xkey select symbol, OA2 from oa2;
+      sig31: select x: avg qlt by symbol, Side from o1dext where TransactTime within(09:14:00.00 ;09:25:30), ?[Side=0;Price >= 0.98 * open; Price <= 1.02 * open]  ;
+      rtn: (rtn lj `symbol xkey select symbol, s32:x  from sig31 where Side = 0) lj `symbol xkey select symbol, s33:  x from sig31 where Side = 1 ;
+      
+      thrd1: select  thrdpx: {[px;side] ?[(first side)=0;min px where 9 = 10 xrank px;max px where 0 = 10 xrank px]}[Price;Side]   by symbol, Side from ord_dext where ?[Side=0;Price>=open;Price<=open]  ;
+      o1dext2: ord_dext lj thrd1;
+      matchstats: select sum Quantity by symbol, Side, Price from  o1dext2 where ?[Side=0;Price<=thrdpx;Price>=thrdpx]  ;
+      matchtj: (select bqty:Quantity, bpx: Price by symbol from matchstats where Side = 0) lj (select sqty:Quantity, spx: Price by symbol from matchstats where Side = 1) lj `symbol xkey select symbol, pre_close from daily_d;
+      oa3: (select symbol, OA2: getmatch'[bqty;bpx;sqty;spx;pre_close] from matchtj) lj `symbol xkey openpx;
+
+      thrdvol: select  thrdvol: {  @[asc x; `int$0.9*count x]  } Quantity  by symbol, Side from ord_dext where ?[Side=0;Price>=open;Price<=open]  ;
+      o1dext3: ord_dext lj thrdvol;
+      matchstats: select sum ?[ (Side = 0) and (Quantity>thrdvol);thrdvol;Quantity] by symbol, Side, Price from  o1dext3 ;
+      matchtj: (select bqty:Quantity, bpx: Price by symbol from matchstats where Side = 0) lj (select sqty:Quantity, spx: Price by symbol from matchstats where Side = 1) lj `symbol xkey select symbol, pre_close from daily_d;
+ //     oa4: (select symbol, oa4: getmatch'[bqty;bpx;sqty;spx;pre_close] from matchtj) lj `symbol xkey openpx;
+//      matchstats: select sum ?[ (Side = 1) and (Quantity>thrdvol);thrdvol;Quantity] by symbol, Side, Price from  o1dext3 ;
+///      matchtj: (select bqty:Quantity, bpx: Price by symbol from matchstats where Side = 0) lj (select sqty:Quantity, spx: Price by symbol from matchstats where Side = 1) lj `symbol xkey select symbol, pre_close from daily_d;
+//       oa5: (select symbol, oa5: getmatch'[bqty;bpx;sqty;spx;pre_close] from matchtj) lj `symbol xkey openpx;
+      
+
+      rtn: rtn lj `symbol xkey select symbol, testsig: (oa4 - oa5)%(oa4 + oa5) from oa4 lj `symbol xkey oa5;
+
+      :update date:d from rtn;
+};
+
+
+smatch: () ,/ auctionmatching peach exec distinct date from tgt;
+select avg r2, dev r2  from select r: cor[s31 ;s33 - s32 ], r2: cor[midrtn55 ; testsig]  by date from { x lj `date`symbol xkey y} over (tgt;smatch) 
+
+
